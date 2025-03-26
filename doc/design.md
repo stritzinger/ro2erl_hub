@@ -178,12 +178,9 @@ The hub relies on the security of the Erlang distribution for communication:
 ## Deployment Considerations
 
 ### Supported Platforms
-- **Linux Distributions:** Primary platform for standard deployments
-- **RTEMS via grisp board:** For embedded deployment scenarios
-- **Future RTOS support:** Subject to Erlang/OTP compatibility
+- **Linux Alpin Distributions:** Primary platform for standard deployments
 
 ### Integration Requirements
 - Add `ro2erl_hub` as a dependency
-- Configure process group scope
 - Ensure proper logging configuration
-- For production, configure braidnode settings 
+- For production, configure braidnode settings
