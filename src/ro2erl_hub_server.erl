@@ -10,6 +10,7 @@ This module is responsible for:
 2. Processing messages from bridges
 3. Forwarding messages between bridges
 4. Maintaining bridge state
+5. Tracking topic information from bridges
 """.
 
 -behaviour(gen_statem).
@@ -23,6 +24,8 @@ This module is responsible for:
 -export([start_link/2]).
 -export([get_bridges/0]).
 -export([dispatch/1]).
+-export([get_topics/0]).
+-export([get_topic/1]).
 
 %% Behaviour gen_statem callback functions
 -export([callback_mode/0]).
@@ -44,7 +47,15 @@ This module is responsible for:
 
 -record(bridge, {
     mon_ref :: reference(),
-    bridge_id :: binary()
+    bridge_id :: binary(),
+    topics = #{} :: #{binary() => #{           % Map of topic name to topic info
+        filterable := boolean(),               % Whether the topic can be filtered
+        bandwidth_limit := non_neg_integer() | infinity, % Current bandwidth limit
+        metrics := #{                          % Topic metrics from this bridge
+            dispatched := #{bandwidth := non_neg_integer(), rate := float()},
+            forwarded := #{bandwidth := non_neg_integer(), rate := float()}
+        }
+    }}
 }).
 
 -record(data, {
@@ -80,6 +91,30 @@ The message will be sent to all bridges with a timestamp and no specific sender.
 dispatch(Message) ->
     Timestamp = erlang:system_time(millisecond),
     gen_statem:cast(?SERVER, {bridge_dispatch, undefined, Timestamp, Message}).
+
+-doc """
+Gets information about all known topics, consolidated across all bridges.
+
+### Returns:
+- #{TopicName :: binary() => TopicInfo :: map()} - Map of topics to consolidated topic information
+""".
+-spec get_topics() -> #{binary() => map()}.
+get_topics() ->
+    gen_statem:call(?SERVER, get_topics).
+
+-doc """
+Gets information about a specific topic, consolidated across all bridges.
+
+### Parameters:
+- TopicName :: binary() - The name of the topic to retrieve
+
+### Returns:
+- {ok, TopicInfo :: map()} - Topic information if topic exists
+- {error, not_found} - If the topic doesn't exist
+""".
+-spec get_topic(TopicName :: binary()) -> {ok, map()} | {error, not_found}.
+get_topic(TopicName) ->
+    gen_statem:call(?SERVER, {get_topic, TopicName}).
 
 
 %=== BEHAVIOUR gen_statem CALLBACK FUNCTIONS ===================================
@@ -146,9 +181,33 @@ handle_common(cast, {bridge_attach, BridgeId, BridgePid}, StateName, Data) ->
                 _ -> {keep_state, NewData}
             end
     end;
+handle_common(cast, {bridge_update_topics, BridgePid, BridgeTopics}, _StateName, Data = #data{bridges = Bridges}) ->
+    case maps:find(BridgePid, Bridges) of
+        error ->
+            ?LOG_WARNING("Received topic update from unknown bridge: ~p", [BridgePid]),
+            keep_state_and_data;
+        {ok, Bridge} ->
+            % Update the topics in the bridge record
+            NewBridge = Bridge#bridge{topics = BridgeTopics},
+            NewBridges = Bridges#{BridgePid => NewBridge},
+            NewData = Data#data{bridges = NewBridges},
+            {keep_state, NewData}
+    end;
 handle_common({call, From}, get_bridges, _StateName, #data{bridges = Bridges}) ->
     BridgeIds = [BridgeId || #bridge{bridge_id = BridgeId} <- maps:values(Bridges)],
     {keep_state_and_data, [{reply, From, lists:sort(BridgeIds)}]};
+handle_common({call, From}, get_topics, _StateName, #data{bridges = Bridges}) ->
+    % Consolidate topics from all bridges on-demand
+    ConsolidatedTopics = consolidate_topics(Bridges),
+    {keep_state_and_data, [{reply, From, ConsolidatedTopics}]};
+handle_common({call, From}, {get_topic, TopicName}, _StateName, #data{bridges = Bridges}) ->
+    % Find information about a specific topic across all bridges
+    case consolidate_topic(TopicName, Bridges) of
+        {ok, TopicInfo} ->
+            {keep_state_and_data, [{reply, From, {ok, TopicInfo}}]};
+        {error, not_found} ->
+            {keep_state_and_data, [{reply, From, {error, not_found}}]}
+    end;
 handle_common(info, {'DOWN', MonRef, process, Pid, Reason}, StateName,
               Data = #data{bridges = Bridges}) ->
     % Check if this is one of our bridges
@@ -205,11 +264,13 @@ attach_bridge(BridgePid, BridgeId, Data = #data{bridges = Bridges}) ->
             % Monitor bridge process
             BridgeMon = monitor(process, BridgePid),
 
-            % Add bridge to map
+            % Create a new bridge record with empty topics map
             NewBridges = maps:put(BridgePid, #bridge{
                 mon_ref = BridgeMon,
-                bridge_id = BridgeId
+                bridge_id = BridgeId,
+                topics = #{}
             }, Bridges),
+
             NewData = Data#data{bridges = NewBridges},
 
             ?LOG_NOTICE("Bridge ~p (~p) attached", [BridgeId, BridgePid]),
@@ -227,7 +288,7 @@ detach_from_bridge(BridgePid, Data = #data{bridges = Bridges}) ->
             % Demonitor bridge process and flush any pending messages
             demonitor(MonRef, [flush]),
 
-            % Update bridge map
+            % Update state
             NewData = Data#data{bridges = NewBridges},
 
             ?LOG_NOTICE("Bridge ~p (~p) detached", [BridgeId, BridgePid]),
@@ -251,3 +312,150 @@ forward_to_all_bridges(Sender, Timestamp, Message,
             false -> ok
         end
     end, Bridges).
+
+-doc """
+Consolidates topic information from all bridges.
+
+This function builds a global view of all topics by collecting and merging
+information from all bridges.
+""".
+-spec consolidate_topics(Bridges :: #{pid() => #bridge{}}) -> #{binary() => map()}.
+consolidate_topics(Bridges) ->
+    % Collect all unique topic names across bridges in a single fold operation
+    TopicNameMap = maps:fold(fun(_, #bridge{topics = Topics}, Acc) ->
+        maps:fold(fun(K, _, M) -> M#{K => true} end, Acc, Topics)
+    end, #{}, Bridges),
+
+    % Convert set to list
+    TopicNames = maps:keys(TopicNameMap),
+
+    % Consolidate information for each topic
+    lists:foldl(fun(TopicName, Acc) ->
+        case consolidate_topic(TopicName, Bridges) of
+            {ok, TopicInfo} ->
+                Acc#{TopicName => TopicInfo};
+            {error, not_found} ->
+                Acc
+        end
+    end, #{}, TopicNames).
+
+-doc """
+Consolidates information for a specific topic across all bridges.
+""".
+-spec consolidate_topic(TopicName :: binary(),
+                        Bridges :: #{pid() => #bridge{}}) ->
+    {ok, map()} | {error, not_found}.
+consolidate_topic(TopicName, Bridges) ->
+    % Find all bridges that have this topic
+    BridgesWithTopic = [
+        {BridgePid, maps:get(TopicName, Bridge#bridge.topics)}
+        || {BridgePid, Bridge} <- maps:to_list(Bridges),
+           maps:is_key(TopicName, Bridge#bridge.topics)
+    ],
+
+    case BridgesWithTopic of
+        [] ->
+            {error, not_found};
+        _ ->
+            % Extract bridge PIDs
+            BridgePids = [BridgePid || {BridgePid, _} <- BridgesWithTopic],
+
+            % Determine filterability - if any bridge marks it non-filterable, it's non-filterable
+            Filterable = lists:all(fun({_, TopicInfo}) ->
+                maps:get(filterable, TopicInfo, true)
+            end, BridgesWithTopic),
+
+            % Get the minimum bandwidth limit (most restrictive)
+            BandwidthLimit = get_min_bandwidth_limit(BridgesWithTopic),
+
+            % Merge metrics from all bridges
+            Metrics = merge_all_metrics(BridgesWithTopic),
+
+            % Return consolidated topic information
+            {ok, #{
+                bridge_pids => BridgePids,
+                filterable => Filterable,
+                bandwidth_limit => BandwidthLimit,
+                metrics => Metrics
+            }}
+    end.
+
+-doc """
+Find the minimum (most restrictive) bandwidth limit across all bridges.
+""".
+-spec get_min_bandwidth_limit(BridgesWithTopic :: list()) -> non_neg_integer() | infinity.
+get_min_bandwidth_limit(BridgesWithTopic) ->
+    % Get all bandwidth limits
+    BandwidthLimits = [
+        maps:get(bandwidth_limit, TopicInfo, infinity)
+        || {_, TopicInfo} <- BridgesWithTopic
+    ],
+
+    % Find the minimum, considering infinity as the highest possible value
+    lists:foldl(fun
+        (infinity, infinity) -> infinity;
+        (infinity, Min) -> Min;
+        (Limit, infinity) -> Limit;
+        (Limit, Min) when Limit < Min -> Limit;
+        (_, Min) -> Min
+    end, infinity, BandwidthLimits).
+
+-doc """
+Merges metrics from all bridges for a specific topic.
+
+This function takes metrics from all bridges that have a specific topic
+and merges them into a single metrics map.
+""".
+-spec merge_all_metrics(BridgesWithTopic :: list()) -> map().
+merge_all_metrics(BridgesWithTopic) ->
+    % Default metrics structure
+    DefaultMetrics = #{
+        dispatched => #{bandwidth => 0, rate => 0.0},
+        forwarded => #{bandwidth => 0, rate => 0.0}
+    },
+
+    % Extract metrics from all bridges
+    AllMetrics = [
+        maps:get(metrics, TopicInfo, DefaultMetrics)
+        || {_, TopicInfo} <- BridgesWithTopic
+    ],
+
+    % Fold all metrics into a single consolidated view
+    lists:foldl(fun(Metrics, AccMetrics) ->
+        merge_metrics(Metrics, AccMetrics)
+    end, DefaultMetrics, AllMetrics).
+
+-spec merge_metrics(NewMetrics :: map(), CurrentMetrics :: map()) -> map().
+merge_metrics(NewMetrics, CurrentMetrics) ->
+    % Default metrics structure
+    DefaultMetric = #{bandwidth => 0, rate => 0.0},
+
+    % Get dispatched metrics
+    NewDispatched = maps:get(dispatched, NewMetrics, DefaultMetric),
+    CurrentDispatched = maps:get(dispatched, CurrentMetrics, DefaultMetric),
+
+    % Get forwarded metrics
+    NewForwarded = maps:get(forwarded, NewMetrics, DefaultMetric),
+    CurrentForwarded = maps:get(forwarded, CurrentMetrics, DefaultMetric),
+
+    % Merge dispatched metrics - sum both bandwidth and rates
+    MergedDispatched = #{
+        bandwidth => maps:get(bandwidth, NewDispatched, 0) +
+                     maps:get(bandwidth, CurrentDispatched, 0),
+        rate => maps:get(rate, NewDispatched, 0.0) +
+                maps:get(rate, CurrentDispatched, 0.0)
+    },
+
+    % Merge forwarded metrics - same approach
+    MergedForwarded = #{
+        bandwidth => maps:get(bandwidth, NewForwarded, 0) +
+                     maps:get(bandwidth, CurrentForwarded, 0),
+        rate => maps:get(rate, NewForwarded, 0.0) +
+                maps:get(rate, CurrentForwarded, 0.0)
+    },
+
+    % Return combined metrics
+    #{
+        dispatched => MergedDispatched,
+        forwarded => MergedForwarded
+    }.

@@ -49,6 +49,13 @@ The hub automatically transitions between these states based on bridge connectio
 - Forwards messages to all connected bridges
 - Handles bridge disconnections and cleanup
 
+### Data Structure
+
+The hub maintains bridge and topic information in a cohesive structure:
+- Bridge records include the bridge's topics as part of their state
+- Topic information is consolidated on-demand when queried
+- This design simplifies bridge management and ensures topic data is automatically cleaned up when bridges disconnect
+
 ## Communication Protocol
 
 ### Hub-Bridge Communication
@@ -80,6 +87,11 @@ The hub implements a higher-level protocol for bridge attachment and detachment:
    - Automatically removes crashed bridges
    - Logs bridge state changes
 
+4. **Topic Management:**
+   - Bridge sends topic updates to the hub with current metrics
+   - Hub can adjust bandwidth limits for specific topics on bridges
+   - Hub maintains a global view of all topics across all bridges
+
 ### Bridge Discovery
 
 The hub utilizes Erlang's process group (`pg`) module for discovery:
@@ -89,17 +101,25 @@ The hub utilizes Erlang's process group (`pg`) module for discovery:
 3. Bridges can attach to the hub when discovered
 4. Hub maintains list of all attached bridges
 
+### Hub-Bridge API
+
+The communication between Hub and Bridge components follows the protocol defined in the main Target-X design document. For detailed message formats and protocol specifications, refer to:
+[Target-X Design Document](https://github.com/stritzinger/ro2erl_doc/blob/main/design.md)
+
 ## Implementation Details
 
 ### State Management
 - Uses `gen_statem` behavior for state transitions
 - Maintains a map of connected bridges with their metadata
 - Handles bridge monitoring and cleanup
+- Tracks topic information from all bridges
 
 ### Message Processing
 - Forwards messages to all connected bridges except the sender
 - Maintains message metadata (bridge ID, timestamp) as received from bridges
 - Implements message deduplication based on bridge IDs
+- Processes topic information updates from bridges
+- Manages topic bandwidth limits across all bridges
 
 ### Error Handling
 - Graceful handling of bridge crashes
@@ -134,6 +154,35 @@ The hub utilizes Erlang's process group (`pg`) module for discovery:
    - Hub removes bridge information
    - Hub cleans up monitoring
    - Hub logs crash
+
+### Topic Management Flow
+
+1. Bridge collects topic metrics:
+   - Tracks bandwidth usage per topic
+   - Records message rates for dispatched and forwarded messages
+   - Maintains information about filterable status and limits
+
+2. Bridge reports topics to hub:
+   - Periodically sends topic information to all connected hubs
+   - Includes filterable status, bandwidth limits, and metrics
+   - Hub stores the information with the bridge record
+
+3. Hub consolidates topic data:
+   - When topic information is requested, data is consolidated on-demand
+   - For all topics view, all unique topics across bridges are identified efficiently
+   - For single topic view, only bridges with that topic are processed
+
+4. Hub manages bandwidth limits:
+   - Analyzes traffic patterns across all bridges
+   - Identifies congestion or overused topics
+   - Sends bandwidth limit updates to bridges as needed
+   - Bridges apply the new limits for traffic shaping
+
+### Metrics Aggregation
+- Bandwidth metrics (bytes/second) are summed across all bridges
+- Message rates (messages/second) are summed across all bridges
+- Topic filterability is determined conservatively (non-filterable if any bridge marks it so)
+- Bandwidth limits use the most restrictive (minimum) value across bridges
 
 ## Configuration
 
@@ -174,6 +223,7 @@ The hub relies on the security of the Erlang distribution for communication:
 - Advanced metrics collection
 - Traffic shaping and prioritization
 - Enhanced error handling
+- Centralized topic management and bandwidth control
 
 ## Deployment Considerations
 
