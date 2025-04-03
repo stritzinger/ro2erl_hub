@@ -27,6 +27,7 @@ This module is responsible for:
 -export([dispatch/1]).
 -export([get_topics/0]).
 -export([get_topic/1]).
+-export([set_topic_bandwidth/2]).
 
 %% Behaviour gen_statem callback functions
 -export([callback_mode/0]).
@@ -126,6 +127,29 @@ Gets information about a specific topic, consolidated across all bridges.
 -spec get_topic(TopicName :: binary()) -> {ok, map()} | {error, not_found}.
 get_topic(TopicName) ->
     gen_statem:call(?SERVER, {get_topic, TopicName}).
+
+-doc """
+Sets the bandwidth limit for a specific topic across all relevant bridges.
+
+This function attempts to set the bandwidth limit for the given topic. It checks
+if the topic exists and is filterable across the necessary bridges. If valid,
+it sends a command to each relevant bridge to apply the limit.
+
+Note: Use `Bandwidth = infinity` to remove the bandwidth limit.
+
+### Parameters:
+- TopicName :: binary() - The name of the topic to modify
+- Bandwidth :: non_neg_integer() | infinity - The desired bandwidth limit in bytes/sec, or infinity to remove limit
+
+### Returns:
+- ok - If the command was successfully sent to the relevant bridges
+- {error, not_found} - If the topic is not known by any bridge
+- {error, not_filterable} - If the topic is known but not marked as filterable by all relevant bridges
+""".
+-spec set_topic_bandwidth(TopicName :: binary(), Bandwidth :: non_neg_integer() | infinity) ->
+    ok | {error, not_found | not_filterable}.
+set_topic_bandwidth(TopicName, Bandwidth) ->
+    gen_statem:call(?SERVER, {set_topic_bandwidth, TopicName, Bandwidth}).
 
 
 %=== BEHAVIOUR gen_statem CALLBACK FUNCTIONS ===================================
@@ -229,6 +253,22 @@ handle_common({call, From}, {get_topic, TopicName}, _StateName, #data{bridges = 
             {keep_state_and_data, [{reply, From, {ok, TopicInfo}}]};
         {error, not_found} ->
             {keep_state_and_data, [{reply, From, {error, not_found}}]}
+    end;
+handle_common({call, From}, {set_topic_bandwidth, TopicName, Bandwidth},
+              _StateName, #data{bridges = Bridges, bridge_mod = BridgeMod}) ->
+    case consolidate_topic(TopicName, Bridges) of
+        {error, not_found} ->
+            {keep_state_and_data, [{reply, From, {error, not_found}}]};
+        {ok, #{filterable := false}} ->
+            {keep_state_and_data, [{reply, From, {error, not_filterable}}]};
+        {ok, #{bridge_pids := BridgePids}} ->
+            lists:foreach(fun(BridgePid) ->
+                ?LOG_DEBUG("Setting bandwidth for topic ~p on bridge ~p to ~p",
+                           [TopicName, BridgePid, Bandwidth]),
+                BridgeMod:set_topic_bandwidth(BridgePid, TopicName, Bandwidth)
+            end, BridgePids),
+            % The notification will come later when bridges update their topics
+            {keep_state_and_data, [{reply, From, ok}]}
     end;
 handle_common(info, {'DOWN', MonRef, process, Pid, _Reason}, StateName,
               Data = #data{bridges = Bridges}) ->

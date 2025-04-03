@@ -61,12 +61,14 @@ The following test cases are planned for future implementation:
     bridge_crash_test/1,
     % Topic and notification tests
     topic_management_test/1,
-    ws_notification_test/1
+    ws_notification_test/1,
+    set_topic_bandwidth_test/1
 ]).
 
 %% Bridge API - Used by the hub
 -export([
-    dispatch/3
+    dispatch/3,
+    set_topic_bandwidth/3
 ]).
 
 
@@ -77,20 +79,20 @@ The following test cases are planned for future implementation:
 
 %% Assertion macros
 -define(assertAttached(ID), fun() ->
-    AttachedBridges = ro2erl_hub_server:get_bridges(),
-    ?assert(lists:member(ID, AttachedBridges),
-            {bridge_not_attached, ID, AttachedBridges})
+    M_AttachedBridges = ro2erl_hub_server:get_bridges(),
+    ?assert(lists:member(ID, M_AttachedBridges),
+            {bridge_not_attached, ID, M_AttachedBridges})
 end()).
 
 -define(assertNotAttached(ID), fun() ->
-    AttachedBridges = ro2erl_hub_server:get_bridges(),
-    ?assertNot(lists:member(ID, AttachedBridges),
-               {bridge_still_attached, ID, AttachedBridges})
+    M_AttachedBridges = ro2erl_hub_server:get_bridges(),
+    ?assertNot(lists:member(ID, M_AttachedBridges),
+               {bridge_still_attached, ID, M_AttachedBridges})
 end()).
 
 -define(assertDispatched(BRIDGE_PID, MESSAGE), fun() ->
     receive
-        {hub_dispatch, BRIDGE_PID, _Timestamp, Msg} when Msg == MESSAGE -> ok
+        {hub_dispatch, BRIDGE_PID, _Timestamp, M_Msg} when M_Msg == MESSAGE -> ok
     after 1000 ->
         ct:fail({dispatch_timeout, MESSAGE, ?MODULE, ?LINE})
     end
@@ -98,7 +100,7 @@ end()).
 
 -define(assertNoMessage(), fun() ->
     receive
-        Any -> ct:fail({unexpected_message, Any, ?MODULE, ?LINE})
+        M_Any -> ct:fail({unexpected_message, M_Any, ?MODULE, ?LINE})
     after 300 ->
         ok
     end
@@ -135,8 +137,8 @@ end()).
 %% Topic update notification check with validation function
 -define(assertNotifyTopicUpdated(TOPIC_NAME, FUN), fun() ->
     receive
-        {hub_notification, {topic_updated, TopicInfo = #{topic_name := TOPIC_NAME}}} ->
-            FUN(TopicInfo)
+        {hub_notification, {topic_updated, M_TopicInfo = #{topic_name := TOPIC_NAME}}} ->
+            FUN(M_TopicInfo)
     after 1000 ->
         ct:fail({notification_timeout, topic_updated, ??TOPIC_NAME, ?MODULE, ?LINE})
     end
@@ -144,10 +146,19 @@ end()).
 
 -define(assertNoNotification(), fun() ->
     receive
-        {hub_notification, Notification} ->
-            ct:fail({unexpected_notification, Notification, ?MODULE, ?LINE})
+        {hub_notification, M_Notification} ->
+            ct:fail({unexpected_notification, M_Notification, ?MODULE, ?LINE})
     after 300 ->
         ok
+    end
+end()).
+
+-define(assertTopicBandwidthSet(BRIDGE_PID, TOPIC_NAME, BANDWIDTH), fun() ->
+    receive
+        {hub_set_topic_bandwidth, BRIDGE_PID, TOPIC_NAME, M_Bandwidth} when M_Bandwidth =:= BANDWIDTH ->
+            ok
+    after 1000 ->
+        ct:fail({bandwidth_set_timeout, TOPIC_NAME, BANDWIDTH, ?MODULE, ?LINE})
     end
 end()).
 
@@ -161,7 +172,8 @@ all() -> [
     multiple_bridges_test,
     bridge_crash_test,
     topic_management_test,
-    ws_notification_test
+    ws_notification_test,
+    set_topic_bandwidth_test
 ].
 
 init_per_suite(Config) ->
@@ -454,7 +466,7 @@ topic_management_test(Config) ->
             }
         }
     },
-    gen_statem:cast(HubPid, {bridge_update_topics, BridgePid, Topics}),
+    bridge_update_topics(HubPid, BridgePid, Topics),
 
     % Allow time for topic update to be processed
     timer:sleep(100),
@@ -533,7 +545,7 @@ ws_notification_test(Config) ->
             }
         }
     },
-    gen_statem:cast(HubPid, {bridge_update_topics, Bridge1Pid, Bridge1Topics}),
+    bridge_update_topics(HubPid, Bridge1Pid, Bridge1Topics),
 
     % Should receive topic_update notifications for both topics from Bridge1
     ?assertNotifyTopicUpdated(CommonTopic),
@@ -559,7 +571,7 @@ ws_notification_test(Config) ->
             }
         }
     },
-    gen_statem:cast(HubPid, {bridge_update_topics, Bridge2Pid, Bridge2Topics}),
+    bridge_update_topics(HubPid, Bridge2Pid, Bridge2Topics),
 
     % Should receive topic_update notifications for both topics from Bridge2
     ?assertNotifyTopicUpdated(CommonTopic),
@@ -577,7 +589,7 @@ ws_notification_test(Config) ->
             }
         }
     },
-    gen_statem:cast(HubPid, {bridge_update_topics, Bridge1Pid, UpdatedBridge1Topics}),
+    bridge_update_topics(HubPid, Bridge1Pid, UpdatedBridge1Topics),
 
     % Should receive notification only for the CommonTopic (not for Bridge1OnlyTopic)
     ?assertNotifyTopicUpdated(CommonTopic, fun(UpdatedTopicInfo) ->
@@ -612,12 +624,125 @@ ws_notification_test(Config) ->
 
     ok.
 
+set_topic_bandwidth_test(Config) ->
+    % Register test process
+    register(current_test, self()),
+    % Join notification group
+    ok = pg:join(test_scope, ws_notification_group, self()),
+
+    HubPid = proplists:get_value(hub_pid, Config),
+    BridgeId = ?BRIDGE_ID(1),
+    BridgePid = start_bridge(self()),
+
+    try
+        % Attach bridge
+        ok = bridge_attach(HubPid, BridgeId, BridgePid),
+        ?assertNotifyAttached(BridgeId),
+
+        % Define topics
+        FilterableTopic = <<"filter_topic">>,
+        NonFilterableTopic = <<"nonfilter_topic">>,
+
+        % Bridge reports topics
+        InitialTopics = #{ % Initial state
+            FilterableTopic => #{
+                filterable => true,
+                bandwidth_limit => 1000,
+                metrics => #{
+                    dispatched => #{bandwidth => 10, rate => 1.0},
+                    forwarded => #{bandwidth => 5, rate => 0.5}
+                }
+            },
+            NonFilterableTopic => #{
+                filterable => false,
+                bandwidth_limit => infinity,
+                metrics => #{
+                    dispatched => #{bandwidth => 20, rate => 2.0},
+                    forwarded => #{bandwidth => 15, rate => 1.5}
+                }
+            }
+        },
+        bridge_update_topics(HubPid, BridgePid, InitialTopics),
+        ?assertNotifyTopicUpdated(FilterableTopic),
+        ?assertNotifyTopicUpdated(NonFilterableTopic),
+        ?assertNoNotification(),
+
+        % 1. Test setting bandwidth on filterable topic
+        NewBandwidth = 500,
+        ?assertEqual(ok, ro2erl_hub_server:set_topic_bandwidth(FilterableTopic, NewBandwidth)),
+        % Verify the mock bridge API was called
+        ?assertTopicBandwidthSet(BridgePid, FilterableTopic, NewBandwidth),
+        % Simulate bridge sending topic update with new bandwidth
+        UpdatedTopics1 = InitialTopics#{
+            FilterableTopic := #{
+                filterable => true,
+                bandwidth_limit => NewBandwidth,
+                metrics => #{
+                    dispatched => #{bandwidth => 10, rate => 1.0},
+                    forwarded => #{bandwidth => 5, rate => 0.5}
+                }
+            }
+        },
+        bridge_update_topics(HubPid, BridgePid, UpdatedTopics1),
+        % Verify notification was sent with new bandwidth
+        ?assertNotifyTopicUpdated(FilterableTopic, fun(TopicInfo) ->
+            ?assertEqual(NewBandwidth, maps:get(bandwidth_limit, TopicInfo))
+        end),
+        % Also get notification for the non-filterable topic (since we updated all topics)
+        ?assertNotifyTopicUpdated(NonFilterableTopic),
+        ?assertNoNotification(),
+
+        % 2. Test removing bandwidth limit (setting to infinity)
+        ?assertEqual(ok, ro2erl_hub_server:set_topic_bandwidth(FilterableTopic, infinity)),
+        % Verify bridge API call
+        ?assertTopicBandwidthSet(BridgePid, FilterableTopic, infinity),
+        % Simulate bridge sending topic update with infinity bandwidth
+        UpdatedTopics2 = UpdatedTopics1#{
+            FilterableTopic := #{
+                filterable => true,
+                bandwidth_limit => infinity,
+                metrics => #{
+                    dispatched => #{bandwidth => 10, rate => 1.0},
+                    forwarded => #{bandwidth => 5, rate => 0.5}
+                }
+            }
+        },
+        bridge_update_topics(HubPid, BridgePid, UpdatedTopics2),
+        % Verify notification
+        ?assertNotifyTopicUpdated(FilterableTopic, fun(TopicInfo) ->
+            ?assertEqual(infinity, maps:get(bandwidth_limit, TopicInfo))
+        end),
+        % Also get notification for the non-filterable topic (since we updated all topics)
+        ?assertNotifyTopicUpdated(NonFilterableTopic),
+        ?assertNoNotification(),
+
+        % 3. Test setting bandwidth on non-existent topic
+        ?assertEqual({error, not_found}, ro2erl_hub_server:set_topic_bandwidth(<<"nonexistent">>, 1000)),
+        ?assertNoMessage(), % No message to bridge
+        ?assertNoNotification(),
+
+        % 4. Test setting bandwidth on non-filterable topic
+        ?assertEqual({error, not_filterable}, ro2erl_hub_server:set_topic_bandwidth(NonFilterableTopic, 1000)),
+        ?assertNoMessage(), % No message to bridge
+        ?assertNoNotification()
+
+    after
+        % Cleanup
+        ok = pg:leave(test_scope, ws_notification_group, self()),
+        stop_bridge(BridgePid)
+    end.
+
 
 %=== BRIDGE API IMPLEMENTATION ===================================================
 
 %% Bridge API Implementation - These are called by the hub
 dispatch(BridgePid, Timestamp, Message) ->
     current_test ! {hub_dispatch, BridgePid, Timestamp, Message},
+    ok.
+
+set_topic_bandwidth(BridgePid, TopicName, Bandwidth) ->
+    % Simulate the bridge receiving the command by sending a message to the test process
+    current_test ! {hub_set_topic_bandwidth, BridgePid, TopicName, Bandwidth},
     ok.
 
 %=== INTERNAL HELPER FUNCTIONS =================================================
@@ -639,6 +764,9 @@ bridge_attach(HubPid, BridgeId, BridgePid) ->
 
 bridge_detach(HubPid, BridgePid) ->
     gen_statem:cast(HubPid, {bridge_detach, BridgePid}).
+
+bridge_update_topics(HubPid, BridgePid, Topics) ->
+    gen_statem:cast(HubPid, {bridge_update_topics, BridgePid, Topics}).
 
 bridge_dispatch(HubPid, BridgePid, Message) ->
     Timestamp = erlang:system_time(millisecond),

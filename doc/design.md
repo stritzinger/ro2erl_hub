@@ -269,13 +269,15 @@ The hub relies on the security of the Erlang distribution for communication:
 - Bridge connection management
 - Process group registration
 - Bridge monitoring
+- WebSocket API (JSON-RPC) for external clients to list topics/bridges, retrieve topic details, and manually set topic bandwidth limits.
+- Real-time WebSocket notifications for topic updates and bridge attach/detach events.
 
 ### Planned Features
 - Message filtering based on rules
 - Advanced metrics collection
 - Traffic shaping and prioritization
 - Enhanced error handling
-- Centralized topic management and bandwidth control
+- Automated bandwidth control logic within the Hub (analyzing aggregated metrics and proactively sending limits to bridges).
 
 ## Deployment Considerations
 
