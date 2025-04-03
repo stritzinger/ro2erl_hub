@@ -32,7 +32,15 @@ The hub is implemented as an Erlang application with the following key component
    - Defines protocol for hub-bridge interaction
    - Handles message formatting and delivery
 
-3. **Hub Supervisor (`ro2erl_hub_sup`):**
+3. **WebSocket Handler (`ro2erl_hub_ws_handler`):**
+   - Provides real-time communication interface for web frontend
+   - Implements JSON-RPC 2.0 protocol over WebSocket
+   - Handles authentication via URL token
+   - Manages WebSocket connections with configurable ping/pong
+   - Forwards notifications from hub server to connected clients
+   - Maintains topic state cache for efficient updates
+
+4. **Hub Supervisor (`ro2erl_hub_sup`):**
    - Top-level supervisor ensuring fault tolerance
    - Manages all hub processes
    - Handles process group registration
@@ -48,6 +56,26 @@ The hub automatically transitions between these states based on bridge connectio
 - Maintains list of connected bridges
 - Forwards messages to all connected bridges
 - Handles bridge disconnections and cleanup
+
+### WebSocket Handler Operation
+
+The WebSocket handler provides the following functionality:
+- Secure WebSocket endpoint with token authentication
+- JSON-RPC 2.0 request/response protocol
+- Real-time notifications for system events
+- Topic state caching for efficient updates
+- Configurable connection management:
+  - Ping interval (default: 30s)
+  - Ping timeout (default: 60s)
+  - Standard WebSocket timeouts
+
+The handler integrates with the hub server through process groups:
+- Joins notification process group on initialization
+- Receives notifications about:
+  - Topic updates
+  - Bridge connections/disconnections
+- Forwards notifications to connected clients
+- Maintains topic state cache for change detection
 
 ### Data Structure
 
@@ -113,6 +141,30 @@ The communication between Hub and Bridge components follows the protocol defined
 - Maintains a map of connected bridges with their metadata
 - Handles bridge monitoring and cleanup
 - Tracks topic information from all bridges
+
+### Environment Configuration
+
+The hub application supports the following environment configurations:
+
+#### WebSocket Handler Configuration
+- `web_auth_token` (binary, default: <<"default_token">>)
+  - Authentication token for WebSocket connections
+  - Must be provided in URL as query parameter
+  - Used to secure WebSocket endpoint
+
+- `port` (integer, default: 8080)
+  - HTTP server port for WebSocket endpoint
+  - Used by Cowboy server for listening
+
+- `ws_ping_interval` (integer, default: 30000)
+  - Interval in milliseconds between WebSocket ping frames
+  - Helps maintain connection health
+  - Default: 30 seconds
+
+- `ws_ping_timeout` (integer, default: 60000)
+  - Timeout in milliseconds for WebSocket pong responses
+  - Connection considered dead if no pong received
+  - Default: 60 seconds
 
 ### Message Processing
 - Forwards messages to all connected bridges except the sender

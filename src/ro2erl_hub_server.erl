@@ -11,6 +11,7 @@ This module is responsible for:
 3. Forwarding messages between bridges
 4. Maintaining bridge state
 5. Tracking topic information from bridges
+6. Sending notifications to WebSocket handlers
 """.
 
 -behaviour(gen_statem).
@@ -21,7 +22,7 @@ This module is responsible for:
 %=== EXPORTS ===================================================================
 
 %% API functions
--export([start_link/2]).
+-export([start_link/3]).
 -export([get_bridges/0]).
 -export([dispatch/1]).
 -export([get_topics/0]).
@@ -58,16 +59,26 @@ This module is responsible for:
     }}
 }).
 
+%% @doc Hub server state data record
 -record(data, {
-    bridges = #{} :: #{pid() => #bridge{}},  % Map of bridge pids to bridge records
-    bridge_mod :: module()                   % Module to use for bridge communication
+    bridges = #{} :: #{pid() => #bridge{}},       % Map of bridge PID to bridge information
+    topics = #{} :: #{binary() => map()},         % Map of topic name to topic information
+    bridge_mod :: module(),                       % Module to use for bridge communication
+    bridge_pg_info :: {atom(), atom()},           % Process group information for bridge discovery
+    notification_pg_info :: {atom(), atom()}      % Process group information for WebSocket notifications
 }).
 
 
 %=== API FUNCTIONS =============================================================
 
-start_link(HubGroup = {_Scope, _Group}, BridgeMod) ->
-    gen_statem:start_link({local, ?SERVER}, ?MODULE, [{HubGroup, BridgeMod}], []).
+%% @doc Starts the hub server with the specified process groups and bridge module.
+-spec start_link(BridgePgInfo :: {atom(), atom()},
+                 NotificationPgInfo :: {atom(), atom()},
+                 BridgeMod :: atom()) ->
+    {ok, pid()} | {error, term()}.
+start_link(BridgePgInfo, NotificationPgInfo, BridgeMod) ->
+    gen_statem:start_link({local, ?SERVER}, ?MODULE,
+                          [BridgePgInfo, NotificationPgInfo, BridgeMod], []).
 
 -doc """
 Gets the list of currently attached bridge IDs.
@@ -121,14 +132,21 @@ get_topic(TopicName) ->
 
 callback_mode() -> [state_functions].
 
-init([{{Scope, Group}, BridgeMod}]) ->
-    % Join the process group
-    pg:join(Scope, Group, self()),
+%% @doc Initializes the server.
+-spec init([{atom(), atom()} | atom(), ...]) -> {ok, atom(), #data{}}.
+init([{BridgePgScope, BridgePgGroup},
+      {NotificationPgScope, NotificationPgGroup},
+      BridgeMod]) ->
+    % Add the hub to the process group to receive bridge discovery messages
+    ok = pg:join(BridgePgScope, BridgePgGroup, self()),
 
-    % Initialize state
+    % Initialize the state
     {ok, idle, #data{
         bridges = #{},
-        bridge_mod = BridgeMod
+        topics = #{},
+        bridge_mod = BridgeMod,
+        bridge_pg_info = {BridgePgScope, BridgePgGroup},
+        notification_pg_info = {NotificationPgScope, NotificationPgGroup}
     }}.
 
 terminate(_Reason, _State, _Data) ->
@@ -175,6 +193,8 @@ handle_common(cast, {bridge_attach, BridgeId, BridgePid}, StateName, Data) ->
         {error, already_attached} ->
             keep_state_and_data;
         {ok, NewData} ->
+            % Send bridge attach notification
+            notify_ws_handlers({bridge_attached, BridgeId}, NewData),
             % Transition to forwarding state if we're currently idle
             case {StateName, maps:size(Data#data.bridges)} of
                 {idle, 0} -> {next_state, forwarding, NewData};
@@ -191,6 +211,8 @@ handle_common(cast, {bridge_update_topics, BridgePid, BridgeTopics}, _StateName,
             NewBridge = Bridge#bridge{topics = BridgeTopics},
             NewBridges = Bridges#{BridgePid => NewBridge},
             NewData = Data#data{bridges = NewBridges},
+            % Send topic update notifications
+            notify_topic_updates(BridgeTopics, NewData),
             {keep_state, NewData}
     end;
 handle_common({call, From}, get_bridges, _StateName, #data{bridges = Bridges}) ->
@@ -208,7 +230,7 @@ handle_common({call, From}, {get_topic, TopicName}, _StateName, #data{bridges = 
         {error, not_found} ->
             {keep_state_and_data, [{reply, From, {error, not_found}}]}
     end;
-handle_common(info, {'DOWN', MonRef, process, Pid, Reason}, StateName,
+handle_common(info, {'DOWN', MonRef, process, Pid, _Reason}, StateName,
               Data = #data{bridges = Bridges}) ->
     % Check if this is one of our bridges
     case find_bridge_by_monitor(MonRef, Bridges) of
@@ -217,7 +239,11 @@ handle_common(info, {'DOWN', MonRef, process, Pid, Reason}, StateName,
             NewBridges = maps:remove(Pid, Bridges),
             NewData = Data#data{bridges = NewBridges},
 
-            ?LOG_NOTICE("Bridge ~p (~p) detached: ~p", [BridgeId, Pid, Reason]),
+            ?LOG_NOTICE("Bridge ~p (~p) unexpectedly disconnected: ~p",
+                        [BridgeId, Pid, _Reason]),
+
+            % Send bridge detach notification with reason
+            notify_ws_handlers({bridge_detached, BridgeId, <<"disconnected">>}, NewData),
 
             % Transition to idle state if there is no more bridges
             case {StateName, maps:size(NewBridges)} of
@@ -291,7 +317,10 @@ detach_from_bridge(BridgePid, Data = #data{bridges = Bridges}) ->
             % Update state
             NewData = Data#data{bridges = NewBridges},
 
-            ?LOG_NOTICE("Bridge ~p (~p) detached", [BridgeId, BridgePid]),
+            ?LOG_NOTICE("Bridge ~p (~p) explicitly detached", [BridgeId, BridgePid]),
+
+            % Send bridge detach notification with reason
+            notify_ws_handlers({bridge_detached, BridgeId, <<"normal">>}, NewData),
 
             {ok, NewData}
     end.
@@ -459,3 +488,30 @@ merge_metrics(NewMetrics, CurrentMetrics) ->
         dispatched => MergedDispatched,
         forwarded => MergedForwarded
     }.
+
+%=== NOTIFICATION FUNCTIONS ====================================================
+
+%% @doc Notify all connected WebSocket handlers about something.
+-spec notify_ws_handlers(Notification :: term(), Data :: #data{}) -> ok.
+notify_ws_handlers(Notification, #data{notification_pg_info = {PgScope, PgGroup}}) ->
+    lists:foreach(fun(Pid) ->
+        Pid ! {hub_notification, Notification}
+    end, pg:get_local_members(PgScope, PgGroup)).
+
+-spec notify_topic_updates(Topics :: #{binary() => map()}, Data :: #data{}) -> ok.
+notify_topic_updates(Topics, Data = #data{bridges = Bridges}) ->
+    % For each updated topic, consolidate information across all bridges and send notification
+    maps:foreach(fun(TopicName, _TopicInfo) ->
+        % Get consolidated topic information from all bridges
+        case consolidate_topic(TopicName, Bridges) of
+            {ok, ConsolidatedInfo} ->
+                % Add topic name to the consolidated info
+                TopicWithName = ConsolidatedInfo#{topic_name => TopicName},
+                % Send a single notification with the consolidated view
+                notify_ws_handlers({topic_updated, TopicWithName}, Data);
+            {error, not_found} ->
+                % This shouldn't happen as we know the topic exists at least in this bridge,
+                % but we handle it gracefully
+                ?LOG_WARNING("Failed to consolidate topic ~p", [TopicName])
+        end
+    end, Topics).

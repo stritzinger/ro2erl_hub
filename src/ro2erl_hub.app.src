@@ -6,12 +6,18 @@
         {mod, {ro2erl_hub_app, []}},
         {applications, [
             kernel,
-            stdlib
+            stdlib,
+            cowboy
         ]},
         {included_applications, [
             braidnode
         ]},
-        {env, []},
+        {env, [
+            {web_auth_token, <<"default_token">>},
+            {port, 8080},
+            {ws_ping_interval, 30000},
+            {ws_ping_timeout, 60000}
+        ]},
         {config, "config/sys.config"},
         {modules, []},
         {licenses, ["Apache-2.0"]},

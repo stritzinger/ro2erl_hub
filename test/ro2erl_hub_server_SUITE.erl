@@ -58,7 +58,10 @@ The following test cases are planned for future implementation:
     dispatch_test/1,
     % Advanced tests
     multiple_bridges_test/1,
-    bridge_crash_test/1
+    bridge_crash_test/1,
+    % Topic and notification tests
+    topic_management_test/1,
+    ws_notification_test/1
 ]).
 
 %% Bridge API - Used by the hub
@@ -101,6 +104,53 @@ end()).
     end
 end()).
 
+%% Notification assertion macros
+-define(assertNotifyAttached(BRIDGE_ID), fun() ->
+    receive
+        {hub_notification, {bridge_attached, BRIDGE_ID}} -> ok
+    after 1000 ->
+        ct:fail({notification_timeout, bridge_attached, ??BRIDGE_ID, ?MODULE, ?LINE})
+    end
+end()).
+
+-define(assertNotifyDetached(BRIDGE_ID), fun() ->
+    receive
+        {hub_notification, {bridge_detached, BRIDGE_ID}} -> ok;
+        {hub_notification, {bridge_detached, BRIDGE_ID, _Reason}} -> ok
+    after 1000 ->
+        ct:fail({notification_timeout, bridge_detached, ??BRIDGE_ID, ?MODULE, ?LINE})
+    end
+end()).
+
+%% Simple topic update notification check (just verifies topic name)
+-define(assertNotifyTopicUpdated(TOPIC_NAME), fun() ->
+    receive
+        {hub_notification, {topic_updated, #{topic_name := TOPIC_NAME}}} ->
+            ok
+    after 1000 ->
+        ct:fail({notification_timeout, topic_updated, ??TOPIC_NAME, ?MODULE, ?LINE})
+    end
+end()).
+
+%% Topic update notification check with validation function
+-define(assertNotifyTopicUpdated(TOPIC_NAME, FUN), fun() ->
+    receive
+        {hub_notification, {topic_updated, TopicInfo = #{topic_name := TOPIC_NAME}}} ->
+            FUN(TopicInfo)
+    after 1000 ->
+        ct:fail({notification_timeout, topic_updated, ??TOPIC_NAME, ?MODULE, ?LINE})
+    end
+end()).
+
+-define(assertNoNotification(), fun() ->
+    receive
+        {hub_notification, Notification} ->
+            ct:fail({unexpected_notification, Notification, ?MODULE, ?LINE})
+    after 300 ->
+        ok
+    end
+end()).
+
 
 %=== CT CALLBACKS =============================================================
 
@@ -109,7 +159,9 @@ all() -> [
     detach_test,
     dispatch_test,
     multiple_bridges_test,
-    bridge_crash_test
+    bridge_crash_test,
+    topic_management_test,
+    ws_notification_test
 ].
 
 init_per_suite(Config) ->
@@ -131,6 +183,7 @@ init_per_testcase(_TestCase, Config) ->
     % Start the hub server
     {ok, HubPid} = ro2erl_hub_server:start_link(
         {test_scope, test_group},
+        {test_scope, ws_notification_group},
         ?MODULE
     ),
 
@@ -363,6 +416,203 @@ bridge_crash_test(Config) ->
 
     ok.
 
+%% Topic and Notification Tests
+topic_management_test(Config) ->
+    % Register test process
+    register(current_test, self()),
+
+    % Create a simulated bridge
+    BridgeId = ?BRIDGE_ID(1),
+    BridgePid = start_bridge(self()),
+
+    % Attach the bridge to the hub
+    HubPid = proplists:get_value(hub_pid, Config),
+    ok = bridge_attach(HubPid, BridgeId, BridgePid),
+    ?assertAttached(BridgeId),
+
+    % Initially, there should be no topics
+    ?assertEqual(#{}, ro2erl_hub_server:get_topics()),
+
+    % Update topics for the bridge
+    TopicName1 = <<"topic1">>,
+    TopicName2 = <<"topic2">>,
+    Topics = #{
+        TopicName1 => #{
+            filterable => true,
+            bandwidth_limit => 1000,
+            metrics => #{
+                dispatched => #{bandwidth => 100, rate => 10.0},
+                forwarded => #{bandwidth => 50, rate => 5.0}
+            }
+        },
+        TopicName2 => #{
+            filterable => false,
+            bandwidth_limit => 500,
+            metrics => #{
+                dispatched => #{bandwidth => 200, rate => 20.0},
+                forwarded => #{bandwidth => 150, rate => 15.0}
+            }
+        }
+    },
+    gen_statem:cast(HubPid, {bridge_update_topics, BridgePid, Topics}),
+
+    % Allow time for topic update to be processed
+    timer:sleep(100),
+
+    % Verify topics are now available via get_topics()
+    AllTopics = ro2erl_hub_server:get_topics(),
+    ?assertEqual(2, maps:size(AllTopics)),
+    ?assert(maps:is_key(TopicName1, AllTopics)),
+    ?assert(maps:is_key(TopicName2, AllTopics)),
+
+    % Verify individual topic retrieval works
+    {ok, Topic1Info} = ro2erl_hub_server:get_topic(TopicName1),
+    ?assertEqual(true, maps:get(filterable, Topic1Info)),
+    ?assertEqual(1000, maps:get(bandwidth_limit, Topic1Info)),
+
+    {ok, Topic2Info} = ro2erl_hub_server:get_topic(TopicName2),
+    ?assertEqual(false, maps:get(filterable, Topic2Info)),
+    ?assertEqual(500, maps:get(bandwidth_limit, Topic2Info)),
+
+    % Test topic that doesn't exist
+    ?assertEqual({error, not_found}, ro2erl_hub_server:get_topic(<<"nonexistent">>)),
+
+    % Cleanup
+    stop_bridge(BridgePid),
+
+    ?assertNoMessage(),
+    ok.
+
+ws_notification_test(Config) ->
+    % Register test process
+    register(current_test, self()),
+
+    % Join the notification process group to receive notifications
+    ok = pg:join(test_scope, ws_notification_group, self()),
+
+    % Verify we're in the process group
+    Members = pg:get_local_members(test_scope, ws_notification_group),
+    ?assert(lists:member(self(), Members)),
+
+    % Create multiple simulated bridges
+    Bridge1Id = ?BRIDGE_ID(1),
+    Bridge2Id = ?BRIDGE_ID(2),
+    Bridge1Pid = start_bridge(self()),
+    Bridge2Pid = start_bridge(self()),
+
+    % Attach both bridges to the hub
+    HubPid = proplists:get_value(hub_pid, Config),
+    ok = bridge_attach(HubPid, Bridge1Id, Bridge1Pid),
+    ok = bridge_attach(HubPid, Bridge2Id, Bridge2Pid),
+
+    % Should receive bridge_attached notifications for both bridges
+    ?assertNotifyAttached(Bridge1Id),
+    ?assertNotifyAttached(Bridge2Id),
+
+    % Define topics for testing
+    CommonTopic = <<"common_topic">>,
+    Bridge1OnlyTopic = <<"bridge1_only">>,
+    Bridge2OnlyTopic = <<"bridge2_only">>,
+
+    % Set initial topics for Bridge1
+    Bridge1Topics = #{
+        CommonTopic => #{
+            filterable => true,
+            bandwidth_limit => 1000,
+            metrics => #{
+                dispatched => #{bandwidth => 100, rate => 10.0},
+                forwarded => #{bandwidth => 50, rate => 5.0}
+            }
+        },
+        Bridge1OnlyTopic => #{
+            filterable => true,
+            bandwidth_limit => 500,
+            metrics => #{
+                dispatched => #{bandwidth => 200, rate => 20.0},
+                forwarded => #{bandwidth => 150, rate => 15.0}
+            }
+        }
+    },
+    gen_statem:cast(HubPid, {bridge_update_topics, Bridge1Pid, Bridge1Topics}),
+
+    % Should receive topic_update notifications for both topics from Bridge1
+    ?assertNotifyTopicUpdated(CommonTopic),
+    ?assertNotifyTopicUpdated(Bridge1OnlyTopic),
+    ?assertNoNotification(),
+
+    % Set initial topics for Bridge2 with different metrics for the common topic
+    Bridge2Topics = #{
+        CommonTopic => #{
+            filterable => true,
+            bandwidth_limit => 2000,
+            metrics => #{
+                dispatched => #{bandwidth => 300, rate => 30.0},
+                forwarded => #{bandwidth => 250, rate => 25.0}
+            }
+        },
+        Bridge2OnlyTopic => #{
+            filterable => false,
+            bandwidth_limit => 1500,
+            metrics => #{
+                dispatched => #{bandwidth => 400, rate => 40.0},
+                forwarded => #{bandwidth => 350, rate => 35.0}
+            }
+        }
+    },
+    gen_statem:cast(HubPid, {bridge_update_topics, Bridge2Pid, Bridge2Topics}),
+
+    % Should receive topic_update notifications for both topics from Bridge2
+    ?assertNotifyTopicUpdated(CommonTopic),
+    ?assertNotifyTopicUpdated(Bridge2OnlyTopic),
+    ?assertNoNotification(),
+
+    % Now update only one topic in Bridge1
+    UpdatedBridge1Topics = #{
+        CommonTopic => #{
+            filterable => true,
+            bandwidth_limit => 800,  % Changed value
+            metrics => #{
+                dispatched => #{bandwidth => 150, rate => 15.0},  % Updated metrics
+                forwarded => #{bandwidth => 75, rate => 7.5}      % Updated metrics
+            }
+        }
+    },
+    gen_statem:cast(HubPid, {bridge_update_topics, Bridge1Pid, UpdatedBridge1Topics}),
+
+    % Should receive notification only for the CommonTopic (not for Bridge1OnlyTopic)
+    ?assertNotifyTopicUpdated(CommonTopic, fun(UpdatedTopicInfo) ->
+        #{filterable := Filterable, bandwidth_limit := BandwidthLimit,
+          metrics := Metrics} = UpdatedTopicInfo,
+        % Should still be consolidated with Bridge2's data
+        ?assertEqual(true, Filterable),
+        % Should use the minimum bandwidth limit
+        ?assertEqual(800, BandwidthLimit),
+        % Metrics should be properly consolidated
+        ?assertEqual(#{bandwidth => 450, rate => 45.0},
+                     maps:get(dispatched, Metrics)),
+        ?assertEqual(#{bandwidth => 325, rate => 32.5}, % 75+250, 7.5+25.0
+                       maps:get(forwarded, Metrics))
+    end),
+
+    % Verify no additional notifications were received
+    ?assertNoNotification(),
+
+    % Test detach notifications
+    ok = bridge_detach(HubPid, Bridge1Pid),
+    ok = bridge_detach(HubPid, Bridge2Pid),
+
+    % Should receive bridge_detached notifications for both bridges
+    ?assertNotifyDetached(Bridge1Id),
+    ?assertNotifyDetached(Bridge2Id),
+
+    % Cleanup
+    stop_bridge(Bridge1Pid),
+    stop_bridge(Bridge2Pid),
+    ok = pg:leave(test_scope, ws_notification_group, self()),
+
+    ok.
+
+
 %=== BRIDGE API IMPLEMENTATION ===================================================
 
 %% Bridge API Implementation - These are called by the hub
@@ -403,4 +653,4 @@ bridge_proc(TestPid) ->
             exit(crash);
         stop ->
             ok
-    end. 
+    end.
