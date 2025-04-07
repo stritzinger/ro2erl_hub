@@ -7,9 +7,7 @@
         {applications, [
             kernel,
             stdlib,
-            cowboy
-        ]},
-        {included_applications, [
+            cowboy,
             braidnode
         ]},
         {env, [
