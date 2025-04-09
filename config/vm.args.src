@@ -2,6 +2,6 @@
 -setcookie cookie
 -proto_dist inet6_tls
 -epmd_module braidnode_epmd
--ssl_dist_optfile "/opt/ro2erl_hub/lib/ro2erl_hub-0.1.0/priv/ssl_dist_opts.rel"
+-ssl_dist_optfile "/opt/ro2erl_hub/lib/braidnode-0.2.0/priv/ssl_dist_opts.rel"
 -kernel inet_dist_listen_min 50100
 -kernel inet_dist_listen_max 50100
