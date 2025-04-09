@@ -37,7 +37,7 @@ local/setup.sh
 Then you can start the shell with:
 
 ```bash
-ERL_FLAGS='-proto_dist inet_tls -ssl_dist_optfile local/ssl_dist_opts.rel -connect_all false' rebar3 as local shell --name hub --setcookie targetx
+ERL_FLAGS='-proto_dist inet_tls -ssl_dist_optfile local/ssl_dist_opts.rel -connect_all false' rebar3 as local shell --sname hub --setcookie targetx
 ```
 
 The hub node will be started with the short name `hub` and the cookie `targetx`.
