@@ -17,17 +17,32 @@ For detailed design information, see:
 
 ## Development
 
-For local development and testing:
+### Without TLS Distribution
+
+Start an interactive shell with debug logging and a specific node name:
 
 ```bash
-# Start an interactive shell with debug logging and a specific node name
 rebar3 shell --sname hub@localhost --setcookie targetx
-
-# Run tests
-rebar3 ct
 ```
 
-The hub node will be started with the short name `hub` and the cookie `targetx`. This allows other nodes (like bridges) to connect to it during development.
+### With TLS Distribution
+
+To start a local development shell with support for TLS distribution, you need
+first to generate a testing CA and certificate:
+
+```bash
+local/setup.sh
+```
+
+Then you can start the shell with:
+
+```bash
+ERL_FLAGS='-proto_dist inet_tls -ssl_dist_optfile local/ssl_dist_opts.rel -connect_all false' rebar3 as local shell --name hub --setcookie targetx
+```
+
+The hub node will be started with the short name `hub` and the cookie `targetx`.
+This allows other nodes (like bridges) to connect to it during development,
+and it should support GRiSP board using its secure element.
 
 ## Production Deployment
 
@@ -46,6 +61,14 @@ docker push local/ro2erl_hub:0.1.0 your-registry/ro2erl_hub:0.1.0
 
 The production build includes the braidnode dependency which is required for deployment on grisp.io. This dependency is not included in the development environment to simplify local testing.
 
+# Run tests
+
+```bash
+rebar3 ct
+```
+
 ## License
 
-[License information to be added] 
+Copyright © 2025 Stritzinger GmbH
+
+Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) file for details.
