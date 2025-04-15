@@ -1,0 +1,37 @@
+@import "tailwindcss";
+
+@import "./fonts.css";
+
+
+/* Background colors */
+@source inline("bg-blue-{50,100,200,300,400,500,600,700,800,900,950}");
+@source inline("bg-neutral-{50,100,200,300,400,500,600,700,800,900,950}");
+
+/* Text colors - note we only use the shades we actually need */
+@source inline("text-blue-{50,600,700,800,900,950}");
+@source inline("text-neutral-{50,600,700,800,900,950}");
+
+@theme {
+  --font-code: "sourcecode pro", "monospace";
+  --font-meta: "meta pro", "sans-serif";
+}
+
+body, .ros2erl-hub {
+  @apply font-meta bg-white text-neutral-900 dark:bg-neutral-900 dark:text-neutral-50 ;
+}
+
+.hub-container {
+  @apply flex flex-col max-w-7xl mx-auto w-full px-4;
+}
+.hub-col {
+  @apply flex flex-col gap-8;
+}
+.hub-row {
+  @apply flex md:flex-row gap-8 flex-col;
+}
+.hub-divide-y {
+  @apply divide-y divide-neutral-400 dark:divide-neutral-500;
+}
+.hub-list {
+  @apply flex flex-col;
+}
