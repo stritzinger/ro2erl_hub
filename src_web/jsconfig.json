@@ -1,8 +1,8 @@
 {
   "compilerOptions": {
     "paths": {
-      "@/*": ["./src/*"]
+      "@/*": ["./src_web/src/*"]
     }
   },
-  "exclude": ["node_modules", "dist"]
+  "exclude": ["./src_web/node_modules", "./priv/web/"]
 }

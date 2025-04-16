@@ -5,7 +5,7 @@ import { invertedShadeMap } from '../utils/colors'
 const props = defineProps({
   color: {
     type: String,
-    default: 'blue-100',
+    default: 'grisp-50',
   },
   rounded: {
     type: String,

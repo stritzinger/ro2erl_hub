@@ -6,13 +6,15 @@ import { library } from '@fortawesome/fontawesome-svg-core'
 import { FontAwesomeIcon } from '@fortawesome/vue-fontawesome'
 
 import {
-  faPlus,
   faCheck,
-  faFloppyDisk,
+  faXmark,
+  faExclamationTriangle,
+  faCircle,
+  faGear,
 } from '@fortawesome/free-solid-svg-icons'
 
 // Add icons to the library
-library.add(faPlus, faCheck, faFloppyDisk)
+library.add(faCheck, faXmark, faExclamationTriangle, faCircle, faGear)
 import App from './App.vue'
 
 const app = createApp(App)
