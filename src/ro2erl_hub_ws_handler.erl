@@ -239,7 +239,7 @@ handle_topic_get(#{topic_name := TopicName},
             % Add to cache (keep full version in cache)
             NewCache = Cache#{TopicName => TopicInfo},
             % Sanitize for client
-            ClientTopic = sanitize_topic_for_client(TopicInfo),
+            ClientTopic = sanitize_topic_for_client(TopicName, TopicInfo),
             {ok, ClientTopic, State#state{topic_cache = NewCache}};
         {error, not_found} ->
             {error, -32001, <<"Topic not found">>, null, State};
@@ -255,7 +255,7 @@ handle_topic_list(State = #state{server_mod = ServerMod, topic_cache = Cache0}) 
     % Update cache and build client topic list in a single fold
     {NewCache, ClientTopics} =
         maps:fold(fun(TopicName, TopicInfo, {Cache, ClientTopics}) ->
-            ClientTopic = sanitize_topic_for_client(TopicInfo),
+            ClientTopic = sanitize_topic_for_client(TopicName, TopicInfo),
             {Cache#{TopicName => TopicInfo}, [ClientTopic | ClientTopics]}
         end, {Cache0, []}, Topics),
 
@@ -302,7 +302,7 @@ handle_hub_notification(Notification, State = #state{topic_cache = Cache}) ->
                 true ->
                     % Filter out PIDs and other internal details from the topic before sending
                     % to the client, while keeping the full topic for our cache
-                    ClientTopic = sanitize_topic_for_client(Topic),
+                    ClientTopic = sanitize_topic_for_client(TopicName, Topic),
                     % Update cache
                     NewState = State#state{topic_cache = Cache#{TopicName => Topic}},
                     % Send notification
@@ -324,7 +324,7 @@ handle_hub_notification(Notification, State = #state{topic_cache = Cache}) ->
     end.
 
 %% Filter out PIDs and other internal details from the topic before sending to client
-sanitize_topic_for_client(Topic) ->
+sanitize_topic_for_client(TopicName, Topic) ->
     % Change infinity to null in bandwidth_limit
     BandwidthLimit = case maps:get(bandwidth_limit, Topic) of
         infinity -> null;
@@ -332,7 +332,7 @@ sanitize_topic_for_client(Topic) ->
     end,
     % Keep only the fields needed by the client
     #{
-        topic_name => maps:get(topic_name, Topic),
+        topic_name => TopicName,
         filterable => maps:get(filterable, Topic),
         bandwidth_limit => BandwidthLimit,
         metrics => maps:get(metrics, Topic)

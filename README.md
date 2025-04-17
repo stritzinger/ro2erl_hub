@@ -22,7 +22,7 @@ For detailed design information, see:
 Start an interactive shell with debug logging and a specific node name:
 
 ```bash
-rebar3 shell --sname hub@localhost --setcookie targetx
+rebar3 shell --sname hub --setcookie targetx
 ```
 
 ### With TLS Distribution
