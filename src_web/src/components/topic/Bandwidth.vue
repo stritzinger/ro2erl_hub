@@ -37,7 +37,7 @@ const handleInput = (event) => {
       <label
         for="bandwidth-input"
         class="text-xs font-meta font-bold text-blue-800 dark:text-white"
-        >Bandwidth Limit (MB/s)</label
+        >Bandwidth Limit (B/s)</label
       >
       <input
         type="number"

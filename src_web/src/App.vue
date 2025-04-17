@@ -43,9 +43,9 @@ const forwardedStats = computed(() => {
     <AlertDialog>
       <p class="text-center">Aggregated stats</p>
       <p class="text-center">
-        <span class="font-code">{{ dispatchedStats }} MB/s</span>
+        <span class="font-code">{{ dispatchedStats }} B/s</span>
         Dispatched &mdash;
-        <span class="font-code">{{ forwardedStats }} MB/s</span>
+        <span class="font-code">{{ forwardedStats }} B/s</span>
         Forwarded
       </p>
     </AlertDialog>

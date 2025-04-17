@@ -39,12 +39,18 @@ defineProps({
               {{ topic.topic_name }}</span
             >
             <span class="hub-topic-grid-item--center flex-col text-sm">
-              <div>{{ topic.metrics.dispatched.bandwidth }} MB/s</div>
-              <div><span>Rate: </span>{{ topic.metrics.dispatched.rate }}</div>
+              <div>{{ topic.metrics.dispatched.bandwidth }} B/s</div>
+              <div>
+                <span>Rate: </span
+                >{{ Number(topic.metrics.dispatched.rate).toFixed(2) }}
+              </div>
             </span>
             <span class="hub-topic-grid-item--center flex-col text-sm">
-              <div>{{ topic.metrics.forwarded.bandwidth }} MB/s</div>
-              <div><span>Rate: </span>{{ topic.metrics.forwarded.rate }}</div>
+              <div>{{ topic.metrics.forwarded.bandwidth }} B/s</div>
+              <div>
+                <span>Rate: </span
+                >{{ Number(topic.metrics.forwarded.rate).toFixed(2) }}
+              </div>
             </span>
             <span class="hub-topic-grid-item--center">
               <FontAwesomeIcon
@@ -70,18 +76,20 @@ defineProps({
               <div class="flex flex-row gap-2 items-center">
                 <strong class="font-meta">Dispatched: </strong>
                 <span class="flex flex-row gap-2 text-sm">
-                  <div>{{ topic.metrics.dispatched.bandwidth }} MB/s</div>
+                  <div>{{ topic.metrics.dispatched.bandwidth }} B/s</div>
                   <div>
-                    <span>Rate: </span>{{ topic.metrics.dispatched.rate }}
+                    <span>Rate: </span
+                    >{{ Number(topic.metrics.dispatched.rate).toFixed(2) }}
                   </div>
                 </span>
               </div>
               <div class="flex flex-row gap-2 items-center">
                 <strong class="font-meta">Forwarded: </strong>
                 <span class="flex flex-row gap-2 text-sm">
-                  <div>{{ topic.metrics.forwarded.bandwidth }} MB/s</div>
+                  <div>{{ topic.metrics.forwarded.bandwidth }} B/s</div>
                   <div>
-                    <span>Rate: </span>{{ topic.metrics.forwarded.rate }}
+                    <span>Rate: </span
+                    >{{ Number(topic.metrics.forwarded.rate).toFixed(2) }}
                   </div>
                 </span>
               </div>
