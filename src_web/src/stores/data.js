@@ -10,7 +10,20 @@ export const useDataStore = defineStore('data', () => {
   })
 
   const topicList = computed(() => {
-    return topic_list.value
+    return topic_list.value.map((topic) => ({
+      ...topic,
+      metrics: {
+        ...topic.metrics,
+        dropped: {
+          bandwidth: Number(
+            (
+              topic.metrics.dispatched.bandwidth -
+              topic.metrics.forwarded.bandwidth
+            ).toFixed(2),
+          ),
+        },
+      },
+    }))
   })
 
   function setBridgeList(list) {
@@ -21,11 +34,11 @@ export const useDataStore = defineStore('data', () => {
     topic_list.value = [...list]
   }
 
-  function getDispatchedStats() {
+  function getDroppedStats() {
     return Number(
       topic_list.value
         .reduce((acc, topic) => {
-          acc += topic.metrics.dispatched.bandwidth
+          acc += topic.metrics?.dropped?.bandwidth || 0
           return acc
         }, 0)
         .toFixed(2),
@@ -48,7 +61,7 @@ export const useDataStore = defineStore('data', () => {
     topicList,
     setBridgeList,
     setTopicList,
-    getDispatchedStats,
+    getDroppedStats,
     getForwardedStats,
   }
 })

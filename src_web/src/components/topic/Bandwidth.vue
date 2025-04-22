@@ -16,12 +16,14 @@ const props = defineProps({
 
 const inputValue = ref(props.value)
 
-const handleSubmit = () => {
-  setBandwidth(props.name, inputValue.value)
+const handleSubmit = async () => {
+  await setBandwidth(props.name, inputValue.value)
+  resetInput()
 }
 
-const handleClear = () => {
-  clearBandwidth(props.name)
+const handleClear = async () => {
+  await clearBandwidth(props.name)
+  resetInput()
 }
 
 const handleInput = (event) => {
@@ -29,11 +31,21 @@ const handleInput = (event) => {
   const value = Math.max(0, Number(event.target.value) || 0)
   inputValue.value = value || null // Set to null if value is 0
 }
+
+const resetInput = () => {
+  inputValue.value = props.value
+}
 </script>
 
 <template>
   <form @submit.prevent="handleSubmit" class="bandwidth-control">
     <div class="bandwidth-control-input">
+      <p
+        v-if="value === null"
+        class="text-sm font-code dark:text-white pb-2 mb-2 border-b border-neutral-400 dark:border-neutral-600"
+      >
+        Unlimited
+      </p>
       <label
         for="bandwidth-input"
         class="text-xs font-meta font-bold text-blue-800 dark:text-white"
@@ -44,7 +56,7 @@ const handleInput = (event) => {
         :value="inputValue"
         @input="handleInput"
         class="bandwidth-input"
-        :placeholder="value === null ? 'Unlimited' : ''"
+        placeholder="e.g. 560"
       />
     </div>
     <div class="bandwidth-control-buttons">
@@ -58,8 +70,9 @@ const handleInput = (event) => {
           Set
         </span>
       </button>
-      <div class="divider"></div>
+      <div v-if="value !== null" class="divider"></div>
       <button
+        v-if="value !== null"
         class="bandwidth-button--link text-grisp-700 bg-grisp-50/20 border border-grisp-700 hover:bg-grisp-50/60 hover:border-grisp-400 dark:text-grisp-500 dark:bg-grisp-500/20 dark:border-grisp-500 dark:hover:bg-grisp-500/30 dark:hover:border-grisp-400"
         @click.prevent="handleClear"
         :disabled="inputValue === null"

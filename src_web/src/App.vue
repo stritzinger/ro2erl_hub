@@ -9,7 +9,7 @@ import { useRo2erlHubStore } from './stores/ro2erlHub'
 import { useDataStore } from './stores/data'
 const ro2erlHubStore = useRo2erlHubStore()
 const { isOpen } = storeToRefs(ro2erlHubStore)
-const { getDispatchedStats, getForwardedStats } = useDataStore()
+const { getDroppedStats, getForwardedStats } = useDataStore()
 const token = ref(null)
 const loading = ref(true)
 
@@ -28,8 +28,8 @@ watch(isOpen, () => {
   loading.value = false
 })
 
-const dispatchedStats = computed(() => {
-  return getDispatchedStats()
+const droppedStats = computed(() => {
+  return getDroppedStats()
 })
 
 const forwardedStats = computed(() => {
@@ -43,8 +43,8 @@ const forwardedStats = computed(() => {
     <AlertDialog>
       <p class="text-center">Aggregated stats</p>
       <p class="text-center">
-        <span class="font-code">{{ dispatchedStats }} B/s</span>
-        Dispatched &mdash;
+        <span class="font-code">{{ droppedStats }} B/s</span>
+        Dropped &mdash;
         <span class="font-code">{{ forwardedStats }} B/s</span>
         Forwarded
       </p>

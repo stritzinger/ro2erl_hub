@@ -27,7 +27,7 @@ defineProps({
         class="hub-topic-grid py-2 px-3 mt-2 bg-sky-100 dark:bg-neutral-800 font-bold"
       >
         <span class="text-left">Name</span>
-        <span class="text-center">Dispatched</span>
+        <span class="text-center">Dropped</span>
         <span class="text-center">Forwarded</span>
         <span class="text-center">Filterable</span>
         <span class="text-right col-span-2">Bandwidth Limit</span>
@@ -39,11 +39,7 @@ defineProps({
               {{ topic.topic_name }}</span
             >
             <span class="hub-topic-grid-item--center flex-col text-sm">
-              <div>{{ topic.metrics.dispatched.bandwidth }} B/s</div>
-              <div>
-                <span>Rate: </span
-                >{{ Number(topic.metrics.dispatched.rate).toFixed(2) }}
-              </div>
+              <div>{{ topic.metrics.dropped.bandwidth }} B/s</div>
             </span>
             <span class="hub-topic-grid-item--center flex-col text-sm">
               <div>{{ topic.metrics.forwarded.bandwidth }} B/s</div>
@@ -74,13 +70,9 @@ defineProps({
             </div>
             <div class="flex flex-col">
               <div class="flex flex-row gap-2 items-center">
-                <strong class="font-meta">Dispatched: </strong>
+                <strong class="font-meta">Dropped: </strong>
                 <span class="flex flex-row gap-2 text-sm">
-                  <div>{{ topic.metrics.dispatched.bandwidth }} B/s</div>
-                  <div>
-                    <span>Rate: </span
-                    >{{ Number(topic.metrics.dispatched.rate).toFixed(2) }}
-                  </div>
+                  <div>{{ topic.metrics?.dropped?.bandwidth }} B/s</div>
                 </span>
               </div>
               <div class="flex flex-row gap-2 items-center">
