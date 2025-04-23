@@ -24,3 +24,10 @@ local/*.cfg
 local/*.srl
 local/*.csr
 local/*.rel
+
+# Web
+src_web/node_modules
+src_web/.env
+
+# Static files
+# priv/web/static

@@ -53,16 +53,18 @@ start(_Type, _Args) ->
     % Configure Cowboy routes for WebSockets
     WebSocketDispatch = cowboy_router:compile([
         {'_', [
+            {"/", cowboy_static, {priv_file, ro2erl_hub, "web/static/index.html"}},
             {"/ws", ro2erl_hub_ws_handler, #{
                 server_mod => ro2erl_hub_server,
                 ws_pg_info => {PgScope, NotificationPgGroup},
                 auth_token => WebAuthToken,
                 ping_interval => WsPingInterval,
                 ping_timeout => WsPingTimeout
-            }}
+            }},
+            {"/[...]", cowboy_static, {priv_dir, ro2erl_hub, ["web/static"], [{mimetypes, cow_mimetypes, all}]}}
         ]}
     ]),
-
+    io:format("Port: ~p~n", [Port]),
     % Start HTTP server (Cowboy)
     {ok, _} = cowboy:start_clear(
         http,

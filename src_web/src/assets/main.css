@@ -1,0 +1,89 @@
+@import "tailwindcss";
+
+@import "./fonts.css";
+
+
+/* Background colors */
+@source inline("bg-grisp-{50,100,200,300,400,500,600,700,800,900,950}");
+@source inline("bg-neutral-{50,100,200,300,400,500,600,700,800,900,950}");
+@source inline("bg-red-{50,100,200,300,400,500,600,700,800,900,950}");
+/* Text colors - note we only use the shades we actually need */
+@source inline("text-grisp-{50,600,700,800,900,950}");
+@source inline("text-neutral-{50,600,700,800,900,950}");
+@source inline("text-red-{50,600,700,800,900,950}");
+@theme {
+  --font-code: "sourcecode pro", "monospace";
+  --font-meta: "meta pro", "sans-serif";
+
+  /* Blue colors */
+  --color-blue-50: #c3d1e1;
+  --color-blue-100: #86a3c2;
+  --color-blue-200: #4a75a3;
+  --color-blue-300: #2c5e94;
+  --color-blue-400: #1d528c;
+  --color-blue-500: #0e4684;
+  --color-blue-600: #0d427c;
+  --color-blue-700: #0c3e74;
+  --color-blue-800: #0b3563;
+  --color-blue-900: #072342;
+  --color-blue-950: #041221;
+
+  /* Grisp colors */
+  --color-grisp-50: #c0e3f3;
+  --color-grisp-100: #80c7e7;
+  --color-grisp-200: #40abdb;
+  --color-grisp-300: #209dd5;
+  --color-grisp-400: #0d96d2;
+  --color-grisp-500: #008ece;
+  --color-grisp-600: #0086c2;
+  --color-grisp-700: #027db5;
+  --color-grisp-800: #016b9b;
+  --color-grisp-900: #004767;
+  --color-grisp-950: #002434;
+
+  /* Sky colors */
+  --color-sky-50: #f2fbfe;
+  --color-sky-100: #e4f6fc;
+  --color-sky-200: #c9edf9;
+  --color-sky-300: #92dbf1;
+  --color-sky-400: #5cc8ea;
+  --color-sky-500: #42c0e6;
+  --color-sky-600: #25b6e3;
+  --color-sky-700: #1fa0c6;
+  --color-sky-800: #1d89aa;
+  --color-sky-900: #135b71;
+  --color-sky-950: #0a2e39;
+
+  /* Coral colors */
+  --color-coral-50: #ffd4d7;
+  --color-coral-100: #fea8ae;
+  --color-coral-200: #ff7c86;
+  --color-coral-300: #f66672;
+  --color-coral-400: #ff5c68;
+  --color-coral-500: #ff505d;
+  --color-coral-600: #f84e5b;
+  --color-coral-700: #f04b58;
+  --color-coral-800: #e04650;
+  --color-coral-900: #c03c46;
+  --color-coral-950: #601e23;
+}
+
+body, .ros2erl-hub {
+  @apply font-meta bg-white text-neutral-900 dark:bg-neutral-900 dark:text-neutral-50 ;
+}
+
+.hub-container {
+  @apply flex flex-col max-w-7xl mx-auto w-full px-4;
+}
+.hub-col {
+  @apply flex flex-col gap-8;
+}
+.hub-row {
+  @apply flex md:flex-row gap-8 flex-col;
+}
+.hub-divide-y {
+  @apply divide-y divide-neutral-400 dark:divide-neutral-500;
+}
+.hub-list {
+  @apply flex flex-col;
+}
