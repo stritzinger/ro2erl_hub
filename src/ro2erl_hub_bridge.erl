@@ -14,6 +14,8 @@ to communicate with the bridge.
 %% API functions
 -export([dispatch/3]).
 -export([set_topic_bandwidth/3]).
+-export([add_peer/3]).
+-export([del_peer/2]).
 
 
 %=== TYPES =====================================================================
@@ -72,4 +74,21 @@ set_topic_bandwidth(BridgePid, TopicName, Bandwidth)
   when is_pid(BridgePid), is_binary(TopicName),
        (is_integer(Bandwidth) andalso Bandwidth >= 0) orelse Bandwidth =:= infinity ->
     gen_statem:cast(BridgePid, {hub_set_topic_bandwidth, TopicName, Bandwidth}),
+    ok.
+
+-doc """
+Adds a peer to the bridge (direct-connect mode).
+""".
+-spec add_peer(BridgePid :: pid(), PeerNode :: node(), Opts :: map()) -> ok.
+add_peer(BridgePid, PeerNode, Opts)
+  when is_pid(BridgePid), is_atom(PeerNode), is_map(Opts) ->
+    gen_statem:cast(BridgePid, {hub_add_peer, PeerNode, Opts}),
+    ok.
+
+-doc """
+Removes a peer from the bridge (direct-connect mode).
+""".
+-spec del_peer(BridgePid :: pid(), PeerNode :: node()) -> ok.
+del_peer(BridgePid, PeerNode) when is_pid(BridgePid), is_atom(PeerNode) ->
+    gen_statem:cast(BridgePid, {hub_del_peer, PeerNode}),
     ok.

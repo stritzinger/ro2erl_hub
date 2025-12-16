@@ -44,6 +44,15 @@ The hub node will be started with the short name `hub` and the cookie `targetx`.
 This allows other nodes (like bridges) to connect to it during development,
 and it should support GRiSP board using its secure element.
 
+## Direct-connect support
+
+The hub can manage direct bridge<->bridge connectivity:
+
+- Bridges that attach with `direct_connect = true` (extended attach tuple) are treated as **direct** bridges.
+- The hub sends `{hub_add_peer, PeerNode, Opts}` / `{hub_del_peer, PeerNode}` to direct bridges so they can connect to each other.
+- In direct-connect mode, the hub **does not proxy data-plane traffic** (it still handles metrics and bandwidth control).
+- Legacy attach `{bridge_attach, BridgeId, BridgePid}` remains supported and equivalent to passing an empty options map.
+
 ## Production Deployment
 
 For production deployment on grisp.io:
