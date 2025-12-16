@@ -62,13 +62,17 @@ The following test cases are planned for future implementation:
     % Topic and notification tests
     topic_management_test/1,
     ws_notification_test/1,
-    set_topic_bandwidth_test/1
+    set_topic_bandwidth_test/1,
+    % Direct-connect tests
+    direct_connect_peer_management_test/1
 ]).
 
 %% Bridge API - Used by the hub
 -export([
     dispatch/3,
-    set_topic_bandwidth/3
+    set_topic_bandwidth/3,
+    add_peer/3,
+    del_peer/2
 ]).
 
 
@@ -162,6 +166,22 @@ end()).
     end
 end()).
 
+-define(assertReceivePeerAdd(NODE), fun() ->
+    receive
+        {hub_add_peer, N, _} when N =:= NODE -> ok
+    after 1000 ->
+        ct:fail({peer_add_timeout, NODE, ?MODULE, ?LINE})
+    end
+end()).
+
+-define(assertNoHubDispatch(), fun() ->
+    receive
+        {hub_dispatch, _, _, _} = Msg -> ct:fail({unexpected_hub_dispatch, Msg})
+    after 300 ->
+        ok
+    end
+end()).
+
 
 %=== CT CALLBACKS =============================================================
 
@@ -173,7 +193,8 @@ all() -> [
     bridge_crash_test,
     topic_management_test,
     ws_notification_test,
-    set_topic_bandwidth_test
+    set_topic_bandwidth_test,
+    direct_connect_peer_management_test
 ].
 
 init_per_suite(Config) ->
@@ -732,6 +753,34 @@ set_topic_bandwidth_test(Config) ->
         stop_bridge(BridgePid)
     end.
 
+%% Direct-connect: hub should manage peers and not proxy data-plane
+direct_connect_peer_management_test(Config) ->
+    TestPid = self(),
+    register(current_test, TestPid),
+
+    HubPid = proplists:get_value(hub_pid, Config),
+
+    Bridge1 = spawn(fun() -> direct_bridge_loop(bridge1) end),
+    Bridge2 = spawn(fun() -> direct_bridge_loop(bridge2) end),
+
+    gen_statem:cast(HubPid, {bridge_attach, <<"b1">>, Bridge1,
+                             #{direct_connect => true, node => node()}}),
+    gen_statem:cast(HubPid, {bridge_attach, <<"b2">>, Bridge2,
+                             #{direct_connect => true, node => node()}}),
+
+    % Expect peer add messages (order may vary)
+    ?assertReceivePeerAdd(node()),
+    ?assertReceivePeerAdd(node()),
+
+    % bridge_dispatch from a direct bridge should be ignored (no forwarding).
+    % Simulate by sending the cast directly.
+    gen_statem:cast(HubPid, {bridge_dispatch, Bridge1, erlang:system_time(millisecond), ping}),
+    ?assertNoHubDispatch(),
+
+    Bridge1 ! stop,
+    Bridge2 ! stop,
+    ok.
+
 
 %=== BRIDGE API IMPLEMENTATION ===================================================
 
@@ -781,4 +830,21 @@ bridge_proc(TestPid) ->
             exit(crash);
         stop ->
             ok
+    end.
+
+add_peer(_BridgePid, PeerNode, PeerOpts) ->
+    current_test ! {hub_add_peer, PeerNode, PeerOpts},
+    ok.
+
+del_peer(_BridgePid, PeerNode) ->
+    current_test ! {hub_del_peer, PeerNode},
+    ok.
+
+direct_bridge_loop(Label) ->
+    receive
+        stop ->
+            ok;
+        Msg ->
+            current_test ! {Label, Msg},
+            direct_bridge_loop(Label)
     end.

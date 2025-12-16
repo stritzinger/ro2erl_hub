@@ -57,7 +57,10 @@ This module is responsible for:
             dispatched := #{bandwidth := non_neg_integer(), rate := float()},
             forwarded := #{bandwidth := non_neg_integer(), rate := float()}
         }
-    }}
+    }},
+    direct_connect = false :: boolean(),
+    node :: node() | undefined,
+    peer_opts = #{} :: map()
 }).
 
 %% @doc Hub server state data record
@@ -203,9 +206,15 @@ forwarding(cast, {bridge_detach, BridgePid}, Data) ->
             end
     end;
 forwarding(cast, {bridge_dispatch, Sender, Timestamp, Message}, Data) ->
-    % Forward message to all bridges except sender
-    forward_to_all_bridges(Sender, Timestamp, Message, Data),
-    keep_state_and_data;
+    case is_direct_bridge(Sender, Data) of
+        true ->
+            ?LOG_WARNING("Ignoring bridge_dispatch from direct-connect bridge ~p", [Sender]),
+            keep_state_and_data;
+        false ->
+            % Forward message to all non-direct bridges except sender
+            forward_to_all_bridges(Sender, Timestamp, Message, Data),
+            keep_state_and_data
+    end;
 forwarding(EventType, EventContent, Data) ->
     handle_common(EventType, EventContent, ?FUNCTION_NAME, Data).
 
@@ -213,7 +222,9 @@ forwarding(EventType, EventContent, Data) ->
 %=== COMMON EVENT HANDLING =====================================================
 
 handle_common(cast, {bridge_attach, BridgeId, BridgePid}, StateName, Data) ->
-    case attach_bridge(BridgePid, BridgeId, Data) of
+    handle_common(cast, {bridge_attach, BridgeId, BridgePid, #{}}, StateName, Data);
+handle_common(cast, {bridge_attach, BridgeId, BridgePid, Opts}, StateName, Data) ->
+    case attach_bridge(BridgePid, BridgeId, Opts, Data) of
         {error, already_attached} ->
             keep_state_and_data;
         {ok, NewData} ->
@@ -274,10 +285,14 @@ handle_common(info, {'DOWN', MonRef, process, Pid, _Reason}, StateName,
               Data = #data{bridges = Bridges}) ->
     % Check if this is one of our bridges
     case find_bridge_by_monitor(MonRef, Bridges) of
-        {ok, Pid, #bridge{bridge_id = BridgeId}} ->
+        {ok, Pid, #bridge{bridge_id = BridgeId, direct_connect = Direct, node = Node}} ->
             % Remove the bridge from our map
             NewBridges = maps:remove(Pid, Bridges),
-            NewData = Data#data{bridges = NewBridges},
+            NewData0 = case Direct of
+                true -> remove_direct_peer(Node, NewBridges, Data);
+                false -> Data#data{bridges = NewBridges}
+            end,
+            NewData = NewData0#data{bridges = NewBridges},
 
             ?LOG_NOTICE("Bridge ~p (~p) unexpectedly disconnected: ~p",
                         [BridgeId, Pid, _Reason]),
@@ -320,9 +335,10 @@ find_bridge_by_monitor(MonRef, Bridges) ->
     end, {error, not_found}, Bridges),
     Result.
 
--spec attach_bridge(BridgePid :: pid(), BridgeId :: binary(), Data :: #data{}) ->
+-spec attach_bridge(BridgePid :: pid(), BridgeId :: binary(), Opts :: map(),
+                    Data :: #data{}) ->
     {ok, #data{}} | {error, already_attached}.
-attach_bridge(BridgePid, BridgeId, Data = #data{bridges = Bridges}) ->
+attach_bridge(BridgePid, BridgeId, Opts, Data = #data{bridges = Bridges}) ->
     case maps:is_key(BridgePid, Bridges) of
         true ->
             {error, already_attached};
@@ -330,18 +346,30 @@ attach_bridge(BridgePid, BridgeId, Data = #data{bridges = Bridges}) ->
             % Monitor bridge process
             BridgeMon = monitor(process, BridgePid),
 
+            DirectConnect = maps:get(direct_connect, Opts, false),
+            Node = maps:get(node, Opts, node(BridgePid)),
+            PeerOpts = maps:get(peer_opts, Opts, #{}),
+
             % Create a new bridge record with empty topics map
             NewBridges = maps:put(BridgePid, #bridge{
                 mon_ref = BridgeMon,
                 bridge_id = BridgeId,
-                topics = #{}
+                topics = #{},
+                direct_connect = DirectConnect,
+                node = Node,
+                peer_opts = PeerOpts
             }, Bridges),
 
             NewData = Data#data{bridges = NewBridges},
 
             ?LOG_NOTICE("Bridge ~p (~p) attached", [BridgeId, BridgePid]),
 
-            {ok, NewData}
+            NewData2 = case DirectConnect of
+                true -> add_direct_peers(BridgePid, NewData);
+                false -> NewData
+            end,
+
+            {ok, NewData2}
     end.
 
 -spec detach_from_bridge(BridgePid :: pid(), Data :: #data{}) ->
@@ -350,12 +378,18 @@ detach_from_bridge(BridgePid, Data = #data{bridges = Bridges}) ->
     case maps:take(BridgePid, Bridges) of
         error ->
             {error, not_attached};
-        {#bridge{mon_ref = MonRef, bridge_id = BridgeId}, NewBridges} ->
+        {#bridge{mon_ref = MonRef, bridge_id = BridgeId, direct_connect = Direct,
+                 node = Node}, NewBridges} ->
             % Demonitor bridge process and flush any pending messages
             demonitor(MonRef, [flush]),
 
+            NewData0 = case Direct of
+                true -> remove_direct_peer(Node, NewBridges, Data);
+                false -> Data#data{bridges = NewBridges}
+            end,
+
             % Update state
-            NewData = Data#data{bridges = NewBridges},
+            NewData = NewData0#data{bridges = NewBridges},
 
             ?LOG_NOTICE("Bridge ~p (~p) explicitly detached", [BridgeId, BridgePid]),
 
@@ -371,14 +405,14 @@ detach_from_bridge(BridgePid, Data = #data{bridges = Bridges}) ->
                              Data :: #data{}) -> ok.
 forward_to_all_bridges(Sender, Timestamp, Message,
                        #data{bridges = Bridges, bridge_mod = BridgeMod}) ->
-    % Forward to all bridges except sender
-    maps:foreach(fun(BridgePid, #bridge{bridge_id = BridgeId}) ->
-        case Sender =:= undefined orelse BridgePid =/= Sender of
-            true ->
+    % Forward to all non-direct bridges except sender
+    maps:foreach(fun(BridgePid, #bridge{bridge_id = BridgeId, direct_connect = Direct}) ->
+        case {Direct, Sender =:= undefined orelse BridgePid =/= Sender} of
+            {false, true} ->
                 ?LOG_DEBUG("Forwarding message from bridge ~p (~p) with timestamp ~p: ~p",
                           [BridgeId, BridgePid, Timestamp, Message]),
                 BridgeMod:dispatch(BridgePid, Timestamp, Message);
-            false -> ok
+            _ -> ok
         end
     end, Bridges).
 
@@ -528,6 +562,49 @@ merge_metrics(NewMetrics, CurrentMetrics) ->
         dispatched => MergedDispatched,
         forwarded => MergedForwarded
     }.
+
+%%--------------------------------------------------------------------
+%% Direct-connect helpers
+%%--------------------------------------------------------------------
+
+-spec is_direct_bridge(pid(), #data{}) -> boolean().
+is_direct_bridge(BridgePid, #data{bridges = Bridges}) ->
+    case maps:find(BridgePid, Bridges) of
+        {ok, #bridge{direct_connect = true}} -> true;
+        _ -> false
+    end.
+
+-spec add_direct_peers(pid(), #data{}) -> #data{}.
+add_direct_peers(NewBridgePid,
+                 Data = #data{bridges = Bridges, bridge_mod = BridgeMod}) ->
+    case maps:find(NewBridgePid, Bridges) of
+        error -> Data;
+        {ok, #bridge{node = NewNode, peer_opts = NewPeerOpts}} ->
+            lists:foldl(fun({BridgePid, #bridge{direct_connect = Direct,
+                                                node = Node,
+                                                peer_opts = PeerOpts}}, AccData) ->
+                case {Direct, BridgePid =/= NewBridgePid} of
+                    {true, true} ->
+                        BridgeMod:add_peer(BridgePid, NewNode, NewPeerOpts),
+                        BridgeMod:add_peer(NewBridgePid, Node, PeerOpts),
+                        AccData;
+                    _ ->
+                        AccData
+                end
+            end, Data, maps:to_list(Bridges))
+    end.
+
+-spec remove_direct_peer(node(), #{pid() => #bridge{}}, #data{}) -> #data{}.
+remove_direct_peer(Node, Bridges, Data = #data{bridge_mod = BridgeMod}) ->
+    maps:fold(fun(BridgePid, #bridge{direct_connect = Direct, node = OtherNode}, Acc) ->
+        case {Direct, Node =/= OtherNode} of
+            {true, true} ->
+                BridgeMod:del_peer(BridgePid, Node),
+                Acc;
+            _ ->
+                Acc
+        end
+    end, Data, Bridges).
 
 %=== NOTIFICATION FUNCTIONS ====================================================
 
