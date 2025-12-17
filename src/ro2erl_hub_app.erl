@@ -68,7 +68,10 @@ start(_Type, _Args) ->
     % Start HTTP server (Cowboy)
     {ok, _} = cowboy:start_clear(
         http,
-        [{port, Port}],
+        [
+            {port, Port},
+            inet6 % Fly.io proxy requires IPv6
+        ],
         #{env => #{dispatch => WebSocketDispatch}}
     ),
 
